@@ -22,9 +22,10 @@ def distributor_summary(df_products):
 
 def allocate_primary_for_distributor(df_products_for_dist, distributor_target=None):
     df = df_products_for_dist.copy().reset_index(drop=True)
-    df["primary_alloc"] = df["primary_plan_base"].astype(float)
 
+    df["primary_alloc"] = df["primary_plan_base"].astype(float)
     base_total = df["primary_alloc"].sum()
+
     if distributor_target is None:
         distributor_target = base_total
 
@@ -33,25 +34,37 @@ def allocate_primary_for_distributor(df_products_for_dist, distributor_target=No
 
     if abs(delta) < 1e-8:
         df["estimated_end_stock"] = df["current_stock"] + df["primary_alloc"] - df["balance_rd"]
+        df["final_shp"] = (df["current_stock"] + df["primary_alloc"] - df["balance_rd"]) / df["3m_avg"]
+        df["final_shp"] = df["final_shp"].round(1)
         return df
 
+    # Increase allocation: fast movers first
     if delta > 0:
         total_rd = df["3m_avg"].sum()
         df = df.sort_values("3m_avg", ascending=False).reset_index(drop=True)
-        df["share"] = df["3m_avg"] / total_rd if total_rd > 0 else 1 / len(df)
-        df["primary_alloc"] += df["share"] * delta
+        if total_rd <= 0:
+            df["add"] = delta / len(df)
+        else:
+            df["share"] = df["3m_avg"] / total_rd
+            df["add"] = df["share"] * delta
+        df["primary_alloc"] += df["add"]
 
+    # Reduce allocation: slow movers first
     else:
         to_remove = -delta
         df = df.sort_values("3m_avg", ascending=True).reset_index(drop=True)
         for idx, row in df.iterrows():
-            remove = min(row["primary_alloc"], to_remove)
-            df.at[idx, "primary_alloc"] -= remove
+            available = row["primary_alloc"]
+            remove = min(available, to_remove)
+            df.at[idx, "primary_alloc"] = available - remove
             to_remove -= remove
             if to_remove <= 0:
                 break
 
     df["primary_alloc"] = df["primary_alloc"].clip(lower=0)
     df["estimated_end_stock"] = df["current_stock"] + df["primary_alloc"] - df["balance_rd"]
+    df["final_shp"] = (df["current_stock"] + df["primary_alloc"] - df["balance_rd"]) / df["3m_avg"]
+    df["final_shp"] = df["final_shp"].round(1)
 
-    return df.sort_values("3m_avg", ascending=False).reset_index(drop=True)
+    df = df.sort_values("3m_avg", ascending=False).reset_index(drop=True)
+    return df
