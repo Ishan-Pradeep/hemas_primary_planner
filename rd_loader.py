@@ -1,122 +1,99 @@
+# rd_loader.py
 import pandas as pd
 
 # -----------------------
 # LOAD 3-MONTH RD DATA
 # -----------------------
-def load_rd_3m():
-    df = pd.read_excel("RDdata.xlsx")
-
-    # Ensure distributor/product codes are strings
+def load_rd_3m(path="RDdata.xlsx"):
+    df = pd.read_excel(path)
     df["DBCode"] = df["DBCode"].astype(str)
     df["Icode"] = df["Icode"].astype(str)
 
-    df.rename(columns={
+    df = df.rename(columns={
         "DBCode": "distributor_id",
         "DbName": "distributor_name",
         "Icode": "product_id",
         "Iname": "product_name",
         "value": "rd_3m_value"
-    }, inplace=True)
+    })
 
-    df_grouped = df.groupby(
-        ["distributor_id", "distributor_name", "product_id", "product_name"],
+    return df.groupby(
+        ["distributor_id", "distributor_name", "product_id", "product_name"], 
         as_index=False
     )["rd_3m_value"].sum()
-
-    return df_grouped
 
 
 # -----------------------
 # LOAD THIS MONTH RD
 # -----------------------
-def load_rd_this_month():
-    df = pd.read_excel("RDthis.xlsx")
-
-    # Ensure distributor/product codes are strings
+def load_rd_this_month(path="RDthis.xlsx"):
+    df = pd.read_excel(path)
     df["DBCode"] = df["DBCode"].astype(str)
     df["Icode"] = df["Icode"].astype(str)
 
-    df.rename(columns={
+    df = df.rename(columns={
         "DBCode": "distributor_id",
         "DbName": "distributor_name",
         "Icode": "product_id",
         "Iname": "product_name",
         "value": "rd_this_value"
-    }, inplace=True)
+    })
 
-    df_grouped = df.groupby(
-        ["distributor_id", "distributor_name", "product_id", "product_name"],
+    return df.groupby(
+        ["distributor_id", "distributor_name", "product_id", "product_name"], 
         as_index=False
     )["rd_this_value"].sum()
-
-    return df_grouped
 
 
 # -----------------------
 # LOAD CURRENT STOCK
 # -----------------------
-def load_stock_data():
-    df = pd.read_excel("CurrentDBS.xlsx")
-
-    # Ensure distributor/product codes are strings
+def load_stock_data(path="CurrentDBS.xlsx"):
+    df = pd.read_excel(path)
     df["DistributorID"] = df["DistributorID"].astype(str)
     df["ProductCode"] = df["ProductCode"].astype(str)
 
-    df.rename(columns={
+    df = df.rename(columns={
         "DistributorID": "distributor_id",
         "ProductCode": "product_id",
         "StockValue": "current_stock"
-    }, inplace=True)
+    })
 
-    df_grouped = df.groupby(
-        ["distributor_id", "product_id"],
-        as_index=False
-    )["current_stock"].sum()
-
-    return df_grouped
+    return df.groupby(["distributor_id", "product_id"], as_index=False)["current_stock"].sum()
 
 
 # -----------------------
-# MERGE EVERYTHING
+# MERGE EVERYTHING AND CALCULATE UPDATED METRICS
 # -----------------------
-def load_merged_data():
-    rd3 = load_rd_3m()
-    rdthis = load_rd_this_month()
-    stock = load_stock_data()
+def load_merged_data(rd3_path="RDdata.xlsx", rdthis_path="RDthis.xlsx", stock_path="CurrentDBS.xlsx"):
+    rd3 = load_rd_3m(rd3_path)
+    rdthis = load_rd_this_month(rdthis_path)
+    stock = load_stock_data(stock_path)
 
-    # Merge RD data
-    df = pd.merge(
-        rd3,
-        rdthis,
-        on=["distributor_id", "product_id"],
-        how="outer",
-        suffixes=("_3m", "_this")
-    )
+    df = pd.merge(rd3, rdthis, on=["distributor_id", "product_id"], how="outer", suffixes=("_3m", "_this"))
 
-    # Restore names when missing
     df["distributor_name"] = df["distributor_name_3m"].fillna(df["distributor_name_this"])
     df["product_name"] = df["product_name_3m"].fillna(df["product_name_this"])
+    df = df.drop(columns=[c for c in df.columns if c.endswith("_3m") or c.endswith("_this")])
 
-    df.drop(columns=[
-        col for col in df.columns
-        if col.endswith("_3m") or col.endswith("_this")
-    ], inplace=True)
+    df["rd_3m_value"] = df.get("rd_3m_value", 0).fillna(0)
+    df["rd_this_value"] = df.get("rd_this_value", 0).fillna(0)
 
-    # Fill missing RD values
-    df["rd_3m_value"] = df["rd_3m_value"].fillna(0)
-    df["rd_this_value"] = df["rd_this_value"].fillna(0)
+    df = pd.merge(df, stock, on=["distributor_id", "product_id"], how="left")
+    df["current_stock"] = df["current_stock"].fillna(0)
 
-    # Load stock
-    df = pd.merge(
-        df,
-        stock,
-        on=["distributor_id", "product_id"],
-        how="left"
-    )
-    df["current_stock"].fillna(0, inplace=True)
-
-    # Compute RD average and remaining
     df["rd_avg"] = df["rd_3m_value"] / 3
     df["rd_upto_now"] = df["rd_this_value"]
+    df["balance_rd"] = df["rd_avg"] - df["rd_upto_now"]
 
-    return df
+    # ⭐ UPDATED FORMULA:
+    df["primary_base"] = (df["rd_avg"] * 1.2) - df["current_stock"] + df["balance_rd"]
+    df["primary_base"] = df["primary_base"].clip(lower=0)
+
+    df["est_end_stock_base"] = df["current_stock"] + df["primary_base"] - df["balance_rd"]
+
+    return df.rename(columns={
+        "rd_avg": "3m_avg",
+        "primary_base": "primary_plan_base",
+        "est_end_stock_base": "estimated_end_stock_base"
+    })
