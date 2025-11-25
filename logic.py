@@ -1,49 +1,57 @@
+# logic.py
 import pandas as pd
+import numpy as np
 
-def calculate_primary(df, primary_target):
-    # Base SHP values
-    TARGET_SHP = 1.2
-    MIN_SHP = 1.0
-    SHP_DOWN_STEP = 0.05
-    SHP_UP_STEP = 0.05
+def distributor_summary(df_products):
+    agg = df_products.groupby(["distributor_id", "distributor_name"], as_index=False).agg({
+        "3m_avg": "sum",
+        "primary_plan_base": "sum"
+    }).rename(columns={
+        "3m_avg": "total_rd_avg",
+        "primary_plan_base": "total_primary_base"
+    })
 
-    # Base stock target
-    df["base_target_stock"] = df["rd_avg"] * TARGET_SHP
-    df["base_primary"] = df["base_target_stock"] - df["current_stock"] + df["rd_remaining"]
+    agg["end_shp_base"] = agg.apply(
+        lambda r: (r["total_primary_base"] / r["total_rd_avg"]) if r["total_rd_avg"] > 0 else np.nan,
+        axis=1
+    )
 
-    base_total = df["base_primary"].sum()
+    agg["target_primary"] = agg["total_primary_base"].copy()
+    return agg
 
-    # Speed (movement rate)
-    df["speed"] = df["rd_avg"] / df["rd_avg"].sum()
 
-    # Weight (sales value importance)
-    df["weight"] = (df["rd_3m_value"] + df["rd_this_value"]) / \
-                    (df["rd_3m_value"] + df["rd_this_value"]).sum()
+def allocate_primary_for_distributor(df_products_for_dist, distributor_target=None):
+    df = df_products_for_dist.copy().reset_index(drop=True)
+    df["primary_alloc"] = df["primary_plan_base"].astype(float)
 
-    # ---------------------
-    # Case 1 — Reduce primary to match target
-    # ---------------------
-    if primary_target < base_total:
-        df["rank"] = df["speed"].rank(ascending=True)
+    base_total = df["primary_alloc"].sum()
+    if distributor_target is None:
+        distributor_target = base_total
 
-        df["adj_shp"] = df.apply(
-            lambda r: max(MIN_SHP, TARGET_SHP - (r["rank"] - 1) * SHP_DOWN_STEP),
-            axis=1
-        )
+    distributor_target = float(distributor_target)
+    delta = distributor_target - base_total
 
-    # ---------------------
-    # Case 2 — Increase primary above normal
-    # ---------------------
+    if abs(delta) < 1e-8:
+        df["estimated_end_stock"] = df["current_stock"] + df["primary_alloc"] - df["balance_rd"]
+        return df
+
+    if delta > 0:
+        total_rd = df["3m_avg"].sum()
+        df = df.sort_values("3m_avg", ascending=False).reset_index(drop=True)
+        df["share"] = df["3m_avg"] / total_rd if total_rd > 0 else 1 / len(df)
+        df["primary_alloc"] += df["share"] * delta
+
     else:
-        df["rank"] = df["weight"].rank(ascending=False)
+        to_remove = -delta
+        df = df.sort_values("3m_avg", ascending=True).reset_index(drop=True)
+        for idx, row in df.iterrows():
+            remove = min(row["primary_alloc"], to_remove)
+            df.at[idx, "primary_alloc"] -= remove
+            to_remove -= remove
+            if to_remove <= 0:
+                break
 
-        df["adj_shp"] = df.apply(
-            lambda r: TARGET_SHP + (r["rank"] - 1) * SHP_UP_STEP,
-            axis=1
-        )
+    df["primary_alloc"] = df["primary_alloc"].clip(lower=0)
+    df["estimated_end_stock"] = df["current_stock"] + df["primary_alloc"] - df["balance_rd"]
 
-    # Final primary allocation
-    df["adj_target_stock"] = df["adj_shp"] * df["rd_avg"]
-    df["adj_primary"] = df["adj_target_stock"] - df["current_stock"] + df["rd_remaining"]
-
-    return df
+    return df.sort_values("3m_avg", ascending=False).reset_index(drop=True)
