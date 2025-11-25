@@ -6,6 +6,10 @@ import pandas as pd
 def load_rd_3m():
     df = pd.read_excel("RDdata.xlsx")
 
+    # Ensure distributor/product codes are strings
+    df["DBCode"] = df["DBCode"].astype(str)
+    df["Icode"] = df["Icode"].astype(str)
+
     df.rename(columns={
         "DBCode": "distributor_id",
         "DbName": "distributor_name",
@@ -28,6 +32,10 @@ def load_rd_3m():
 def load_rd_this_month():
     df = pd.read_excel("RDthis.xlsx")
 
+    # Ensure distributor/product codes are strings
+    df["DBCode"] = df["DBCode"].astype(str)
+    df["Icode"] = df["Icode"].astype(str)
+
     df.rename(columns={
         "DBCode": "distributor_id",
         "DbName": "distributor_name",
@@ -49,6 +57,10 @@ def load_rd_this_month():
 # -----------------------
 def load_stock_data():
     df = pd.read_excel("CurrentDBS.xlsx")
+
+    # Ensure distributor/product codes are strings
+    df["DistributorID"] = df["DistributorID"].astype(str)
+    df["ProductCode"] = df["ProductCode"].astype(str)
 
     df.rename(columns={
         "DistributorID": "distributor_id",
